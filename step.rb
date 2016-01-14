@@ -34,7 +34,7 @@ end
 # -----------------------
 
 #
-# Input validation
+# Parse options
 options = {
     project: nil,
     configuration: nil,
@@ -49,9 +49,9 @@ parser = OptionParser.new do |opts|
   opts.on('-p', '--project path', 'Project') { |p| options[:project] = p unless p.to_s == '' }
   opts.on('-c', '--configuration config', 'Configuration') { |c| options[:configuration] = c unless c.to_s == '' }
   opts.on('-l', '--platform platform', 'Platform') { |l| options[:platform] = l unless l.to_s == '' }
-  opts.on('-i', '--clean build', 'Clean build') { |i| options[:clean_build] = false unless to_bool(i)}
-  opts.on('-e', '--options export', 'Export options') { |e| options[:export_options] = e unless e.to_s == ''}
-  opts.on('-f', '--filter platform', 'Platform filter') { |f| options[:platform_filter] = f unless f.to_s == ''}
+  opts.on('-i', '--clean build', 'Clean build') { |i| options[:clean_build] = false unless to_bool(i) }
+  opts.on('-e', '--options export', 'Export options') { |e| options[:export_options] = e unless e.to_s == '' }
+  opts.on('-f', '--filter platform', 'Platform filter') { |f| options[:platform_filter] = f unless f.to_s == '' }
   opts.on('-h', '--help', 'Displays Help') do
     exit
   end
@@ -63,7 +63,7 @@ if options[:platform_filter] != nil
 end
 
 #
-# Print configs
+# Print options
 puts
 puts '========== Configs =========='
 puts " * project: #{options[:project]}"
@@ -74,7 +74,7 @@ puts " * export_options: #{options[:export_options]}"
 puts " * platform_filter: #{options[:platform_filter]}"
 
 #
-# Validate inputs
+# Validate options
 fail_with_message('No project file found') unless options[:project] && File.exist?(options[:project])
 fail_with_message('No configuration environment found') unless options[:configuration]
 fail_with_message('No platform environment found') unless options[:platform]
@@ -82,7 +82,13 @@ fail_with_message('No platform environment found') unless options[:platform]
 #
 # Main
 builder = Builder.new(options[:project], options[:configuration], options[:platform], options[:platform_filter])
-builder.build
+begin
+  builder.build
+rescue Exception => e
+  fail_with_message("Build failed, with exception: #{e}") unless e.nil?
+  fail_with_message('Build failed') if e.nil?
+end
+
 
 outputs = builder.generated_files
 puts "outputs: #{outputs}"
@@ -90,19 +96,25 @@ puts "outputs: #{outputs}"
 outputs.each do |extension, path|
   case extension
     when :xcarchive
-      # Generate export options
-      #  Bundle install
-      current_dir = File.expand_path(File.dirname(__FILE__))
-      gemfile_path = File.join(current_dir, 'Gemfile')
-
-      bundle_install_command = "BUNDLE_GEMFILE=#{gemfile_path} bundle install"
       puts
-      puts bundle_install_command
-      system(bundle_install_command)
-
-      #  Bundle exec
+      puts '=> Exporting IPA...'
       export_options_path = options[:export_options]
       unless export_options_path
+        puts
+        puts ' => Generating export options...'
+        # Generate export options
+        #  Bundle install
+        current_dir = File.expand_path(File.dirname(__FILE__))
+        gemfile_path = File.join(current_dir, 'Gemfile')
+
+        bundle_install_command = "BUNDLE_GEMFILE=#{gemfile_path} bundle install"
+        puts
+        puts bundle_install_command
+        success = system(bundle_install_command)
+        fail_with_message('Failed to create export options (required gem install failed)') if success.nil? || !success
+
+
+        #  Bundle exec
         export_options_path = File.join(@deploy_dir, 'export_options.plist')
         export_options_generator = File.join(current_dir, 'generate_export_options.rb')
 
@@ -112,7 +124,8 @@ outputs.each do |extension, path|
         bundle_exec_command = bundle_exec_command_params.join(' ')
         puts
         puts bundle_exec_command
-        system(bundle_exec_command)
+        success = system(bundle_exec_command)
+        fail_with_message('Failed to create export options (required gem install failed)') if success.nil? || !success
       end
 
       # Export ipa
@@ -125,10 +138,11 @@ outputs.each do |extension, path|
       export_command = export_command_params.join(' ')
       puts
       puts export_command
-      system(export_command)
+      success = system(export_command)
+      fail_with_message('Failed to export IPA') if success.nil? || !success
 
       temp_ipa_path = Dir[File.join(temp_dir, '*.ipa')].first
-      raise 'No generated ipa found' unless temp_ipa_path
+      fail_with_message('No generated ipa found') unless temp_ipa_path
 
       ipa_name = File.basename(temp_ipa_path)
       ipa_path = File.join(@deploy_dir, ipa_name)
